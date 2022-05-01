@@ -9,7 +9,7 @@ use std::{
 	collections::HashMap,
 	error::Error,
 	io::{Read, Write},
-	time::{SystemTime, UNIX_EPOCH},
+	time::{SystemTime, UNIX_EPOCH}, sync::mpsc::{Sender, Receiver, channel},
 };
 
 #[derive(Debug)]
@@ -24,10 +24,20 @@ impl MessageHeader {
 	}
 }
 
+pub struct StateChangeEvent {
+	pub key: u32,
+	pub state: State,
+}
+
+impl StateChangeEvent {
+    pub(crate) fn new(key: u32, state: State) -> Self { Self { key, state } }
+}
+
 pub struct Connection<'a> {
 	cis: CodedInputStream<'a>,
 	cos: CodedOutputStream<'a>,
 	states: HashMap<u32, State>,
+	sender: Option<Sender<StateChangeEvent>>,
 }
 
 impl<'a> Connection<'a> {
@@ -40,7 +50,14 @@ impl<'a> Connection<'a> {
 			cis: CodedInputStream::new(reader),
 			cos: CodedOutputStream::new(writer),
 			states: HashMap::new(),
+			sender: None,
 		}
+	}
+
+	pub fn get_state_receiver(&mut self) -> Receiver<StateChangeEvent> {
+		let (tx, rx) = channel();
+		self.sender = Some(tx);
+		rx
 	}
 }
 
@@ -62,8 +79,15 @@ impl<'a> Connection<'a> {
 		Ok(())
 	}
 
-	pub fn get_last_state(&mut self, entity: &Entity) -> Result<Option<State>, Box<dyn Error>> {
+	pub fn get_last_state(&self, entity: &Entity) -> Result<Option<State>, Box<dyn Error>> {
 		match self.states.get(&entity.key()) {
+			Some(s) => Ok(Some(s.clone())),
+			None => Ok(None),
+		}
+	}
+
+	pub fn get_last_state_for_key(&self, entity_key: u32) -> Result<Option<State>, Box<dyn Error>> {
+		match self.states.get(&entity_key) {
 			Some(s) => Ok(Some(s.clone())),
 			None => Ok(None),
 		}
@@ -103,6 +127,20 @@ impl<'a> Connection<'a> {
 		Ok(())
 	}
 
+	fn on_new_state(&mut self, key: u32, state: State) {
+
+		let s = self.states.get(&key);
+		if let Some(s) = s {
+			if *s == state {
+				return
+			}
+		}
+		self.states.insert(key, state.clone());
+		if let Some(sender) = &self.sender {
+			_= sender.send(StateChangeEvent::new(key, state));
+		};
+	}
+
 	fn process_unsolicited(&mut self, header: &MessageHeader) -> Result<bool, EspHomeError> {
 		match FromPrimitive::from_u32(header.message_type) {
 			Some(MessageType::PingRequest) => {
@@ -130,27 +168,49 @@ impl<'a> Connection<'a> {
 
 			Some(MessageType::SensorStateResponse) => {
 				let ssr: api::SensorStateResponse = self.receive_message_body(&header)?;
-				self.states.insert(ssr.key, State::Measurement(ssr.state));
+				self.on_new_state(ssr.key, State::Measurement(ssr.state));
 				Ok(true)
 			}
 
 			Some(MessageType::BinarySensorStateResponse) => {
 				let ssr: api::BinarySensorStateResponse = self.receive_message_body(&header)?;
-				self.states.insert(ssr.key, State::Binary(ssr.state));
+				self.on_new_state(ssr.key, State::Binary(ssr.state));
 				Ok(true)
 			}
 
 			Some(MessageType::TextSensorStateResponse) => {
 				let ssr: api::TextSensorStateResponse = self.receive_message_body(&header)?;
-				self.states.insert(ssr.key, State::Text(ssr.state));
+				self.on_new_state(ssr.key, State::Text(ssr.state.clone()));
+				Ok(true)
+			}
+
+			Some(MessageType::SwitchStateResponse) => {
+				let ssr: api::SwitchStateResponse = self.receive_message_body(&header)?;
+				self.on_new_state(ssr.key, State::Binary(ssr.state));
+				Ok(true)
+			}
+
+			Some(MessageType::LightStateResponse) => {
+				let ssr: api::LightStateResponse = self.receive_message_body(&header)?;
+				self.on_new_state(ssr.key, State::LightState((ssr.state, ssr.brightness)));
+				Ok(true)
+			}
+
+			Some(MessageType::FanStateResponse) => {
+				let ssr: api::FanStateResponse = self.receive_message_body(&header)?;
+				self.on_new_state(ssr.key, State::FanState(ssr.state));
+				Ok(true)
+			}
+
+
+			Some(MessageType::LockStateResponse) => {
+				let ssr: api::LockStateResponse = self.receive_message_body(&header)?;
+				self.on_new_state(ssr.key, State::LockState(ssr.state));
 				Ok(true)
 			}
 
 			// State updates
 			Some(MessageType::CoverStateResponse)
-			| Some(MessageType::FanStateResponse)
-			| Some(MessageType::LightStateResponse)
-			| Some(MessageType::SwitchStateResponse)
 			| Some(MessageType::ClimateStateResponse)
 			| Some(MessageType::NumberStateResponse)
 			| Some(MessageType::SelectStateResponse) => {

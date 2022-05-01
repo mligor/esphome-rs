@@ -22,17 +22,31 @@ pub enum EspHomeError {
 	SystemTime(#[from] std::time::SystemTimeError),
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum State {
 	Binary(bool),
 	Measurement(f32),
 	Text(String),
+	LightState((bool, f32)), //TODO: add all states for light
+	FanState(bool), //TODO: add all states for fan
+	LockState(crate::api::LockState), 
 }
 
 #[derive(Debug)]
 pub struct ExtendedInfo {
 	pub(crate) object_id: String,
 	pub(crate) unique_id: String,
+}
+
+impl ExtendedInfo {
+    
+	pub fn object_id(&self) -> String {
+		self.object_id.clone()
+	}
+
+	pub fn unique_id(&self) -> String {
+		self.unique_id.clone()
+	}
 }
 
 #[derive(Debug)]
@@ -55,7 +69,34 @@ impl Entity {
 	pub fn key(&self) -> u32 {
 		self.info.key
 	}
-}
+
+	pub fn name(&self) -> String {
+		self.info.name.clone()
+	}
+
+	pub fn kind(&self) -> &EntityKind {
+		&self.kind
+	}
+
+	pub fn extended_info(&self) -> ::std::option::Option<&ExtendedInfo> {
+		match &self.kind {
+			EntityKind::BinarySensor(ei) => Some(ei),
+			EntityKind::Camera(ei) => Some(ei),
+			EntityKind::Climate(ei) => Some(ei),
+			EntityKind::Cover(ei) => Some(ei),
+			EntityKind::Fan(ei) => Some(ei),
+			EntityKind::Light(ei) => Some(ei),
+			EntityKind::Number(ei) => Some(ei),
+			EntityKind::Select(ei) => Some(ei),
+			EntityKind::Sensor(ei) => Some(ei),
+			EntityKind::Services => None,
+			EntityKind::Switch(ei) => Some(ei),
+			EntityKind::TextSensor(ei) => Some(ei),
+			EntityKind::Lock(ei) => Some(ei),
+			EntityKind::Button(ei) => Some(ei),
+		}.clone()
+	}
+ }
 
 #[derive(Debug)]
 pub enum EntityKind {
@@ -71,6 +112,8 @@ pub enum EntityKind {
 	Services,
 	Switch(ExtendedInfo),
 	TextSensor(ExtendedInfo),
+	Lock(ExtendedInfo),
+	Button(ExtendedInfo),
 }
 
 #[derive(Debug, Copy, Clone, FromPrimitive)]
@@ -103,6 +146,7 @@ pub enum MessageType {
 	SensorStateResponse = 25,
 	SwitchStateResponse = 26,
 	TextSensorStateResponse = 27,
+	LockStateResponse = 59,
 
 	ClimateStateResponse = 47,
 	NumberStateResponse = 50,
@@ -116,4 +160,7 @@ pub enum MessageType {
 	ListEntitiesClimateResponse = 46,
 	ListEntitiesNumberResponse = 49,
 	ListEntitiesSelectResponse = 52,
+	ListEntitiesLockResponse = 58,
+	ListEntitiesButtonResponse = 61,
+
 }

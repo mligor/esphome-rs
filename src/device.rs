@@ -1,3 +1,4 @@
+use crate::StateChangeEvent;
 use crate::connection::Connection;
 use crate::model::{Entity, EntityInfo, EntityKind, ExtendedInfo};
 use crate::{
@@ -6,6 +7,7 @@ use crate::{
 };
 use num_traits::FromPrimitive;
 use std::error::Error;
+use std::sync::mpsc::Receiver;
 
 pub struct Device<'a> {
 	pub connection: Connection<'a>,
@@ -126,6 +128,8 @@ extended_info_from!(api::ListEntitiesCameraResponse);
 extended_info_from!(api::ListEntitiesClimateResponse);
 extended_info_from!(api::ListEntitiesSelectResponse);
 extended_info_from!(api::ListEntitiesNumberResponse);
+extended_info_from!(api::ListEntitiesLockResponse);
+extended_info_from!(api::ListEntitiesButtonResponse);
 
 impl From<api::ListEntitiesServicesResponse> for EntityInfo {
 	fn from(m: api::ListEntitiesServicesResponse) -> Self {
@@ -168,11 +172,13 @@ impl<'a> AuthenticatedDevice<'a> {
 		Ok(())
 	}
 
-	pub fn subscribe_states(&mut self) -> Result<(), EspHomeError> {
+	pub fn subscribe_states(&mut self) -> Result<Receiver<StateChangeEvent>, EspHomeError> {
+		let rx = self.device.connection.get_state_receiver();
 		self.device.connection.send_message(
 			MessageType::SubscribeStatesRequest,
 			&api::SubscribeStatesRequest::new(),
-		)
+		)?;
+		Ok(rx)
 	}
 
 	pub fn list_entities(&mut self) -> Result<Vec<Entity>, EspHomeError> {
@@ -292,6 +298,24 @@ impl<'a> AuthenticatedDevice<'a> {
 					entities.push(Entity::new(
 						EntityInfo::from(sr.clone()),
 						EntityKind::Number(ExtendedInfo::from(sr)),
+					))
+				}
+
+				Some(MessageType::ListEntitiesLockResponse) => {
+					let sr: api::ListEntitiesLockResponse =
+						self.device.connection.receive_message_body(&header)?;
+					entities.push(Entity::new(
+						EntityInfo::from(sr.clone()),
+						EntityKind::Lock(ExtendedInfo::from(sr)),
+					))
+				}
+
+				Some(MessageType::ListEntitiesButtonResponse) => {
+					let sr: api::ListEntitiesButtonResponse =
+						self.device.connection.receive_message_body(&header)?;
+					entities.push(Entity::new(
+						EntityInfo::from(sr.clone()),
+						EntityKind::Button(ExtendedInfo::from(sr)),
 					))
 				}
 
